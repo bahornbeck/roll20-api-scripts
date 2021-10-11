@@ -58,8 +58,14 @@ const srun3= function() {
         return charid;
     }
     
-    const getTokensByName = name => {
-        var mytokens = findObjs({ type: 'graphic', subtype: "token", represents: "" });
+    const getTokensByName = (name, layer="none") => {
+        var myfilter={
+            type: 'graphic',
+            subtype: 'token',
+            represents: ""
+        }
+        if ( layer !="none") myfilter["layer"]=layer;
+        var mytokens = findObjs(myfilter);
         mytokens = mytokens.map(function (token) {
             if (token.get('name').toLowerCase().includes(name.toLowerCase())) return token["id"];
         });
@@ -205,6 +211,7 @@ const srun3= function() {
     }
     const hidegrenade = function(argv) {
         const grenades=getTokensByName("grenade");
+        state["srun3api"]["grenades"]=[];
         if (!grenades) {
             log('no tokens found with name of grenade*');
             return;
@@ -436,15 +443,24 @@ const srun3= function() {
     const rtexplosive = function (rollmap, rolls, playerid) {
         log('starting explosive')
         const stateoptions=state["srun3api"];
+        if ("grenades" in state["srun3api"]) log('good')
+        else state["srun3api"]["grenades"]=[];
         const grenadestatus = ( "grenade" in stateoptions)? stateoptions["grenade"]: "off";
         if (grenadestatus == "off") return;
-        const mygrenade = getTokensByName("apigrenade"); 
+        const grenadename = getRollValue(rollmap["myname"], rolls) + "'s grenade";
+        var mygrenade = getTokensByName(grenadename, "gmlayer");
+        var mygrenadetemplate; 
         if (!mygrenade) {
-            log('no tokens found with name of grenade*');
-            return;
+            log('no existing tokens found, checking for template token named apigrenade');
+            mygrenadetemplate = getTokensByName("apigrenade")[0];
+            if (!mygrenadetemplate) {
+                log('no template token found for grenade with name of apigrenade ')
+                return;
+            } 
         }
         log('found grenade token')
         log(mygrenade);
+        
         let scatdir = getRollValue(rollmap["scatdirnumber"], rolls);
         let scatter = getRollValue(rollmap["scatter"], rolls, 1);
         let target = getRollValue(rollmap["targettoken"], rolls);
@@ -457,8 +473,10 @@ const srun3= function() {
             let mypage = targettoken.get('pageid');
             let mytop = targettoken.get('top');
             let myleft = targettoken.get('left');
-            let leftdiff = targettoken.get('left') - attacktoken.get('left');
-            let topdiff = targettoken.get('top') - attacktoken.get('top');
+            let attackleft = attacktoken.get('left');
+            let attacktop = attacktoken.get('top');
+            let leftdiff = myleft - attackleft;
+            let topdiff = mytop - attacktop;
             let myrads = Math.atan2(topdiff, leftdiff);
             let mydegs = getDegs(myrads);
             log('original angle: ' + mydegs);
@@ -497,12 +515,61 @@ const srun3= function() {
             log('X start: ' + myleft + ' X end: ' + myx);
             log('Y start: ' + mytop + ' Y end: ' + myy);
             log('scatdir: ' + scatdir + ' scatter: ' + scatter);
-            
-            mygrenade.forEach(token => {
+
+
+            var grenadetoken;
+            if (mygrenadetemplate) {
+                const cloneobject = getObj('graphic', mygrenadetemplate);
+                log('creating new grenade token')
+                log('debug cloneobject')
+                log(cloneobject);
+                var myimagesrc=cloneobject.get('imgsrc');
+                const myheight=cloneobject.get('height');
+                const mywidth = cloneobject.get('width');
+                myimagesrc = myimagesrc.replace("med.png", "thumb.png");
+                myimagesrc = myimagesrc.replace("max.png", "thumb.png");
+            var newtoken = {
+                layer: "objects",
+                pageid: mypage,
+                subtype: "token",
+                showname: true,
+                name: grenadename,
+                imgsrc: myimagesrc,
+                left: attackleft,
+                top: attacktop,
+                height: myheight,
+                width: mywidth
+            };
+            grenadetoken = createObj('graphic', newtoken);
+            log(grenadetoken); }
+            else {
+                log('using existing grenade token ' + mygrenade[0])
+                grenadetoken = getObj('graphic', mygrenade[0] )
+            }
+            var turnorder = JSON.parse(Campaign().get("turnorder"));
+            const attackerpr = turnorder.filter(function (token) {
+                return token['id'] == attacker;
+            });
+            let grenadetracker={
+                id: grenadetoken.get('id'),
+                pr: attackerpr[0]["pr"],
+                custom: ""
+            }
+            log(grenadetracker)
+            turnorder.push(grenadetracker);
+            log('debug turnorder')
+            log(turnorder)
+            Campaign().set("turnorder", JSON.stringify(turnorder));
+            grenadetoken.set({left: myx, top: myy, layer: "objects"});
+            log('left: ' + myx + ' | top: ' + myy)
+            log(grenadetoken)
+            state["srun3api"]["grenades"].push(grenadetoken.get('id'))
+            /* mygrenade.forEach(token => {
                 let grenade = findObjs({ type: 'graphic', id: token })[0];
                 log(grenade)
                 grenade.set({ left: myx, top: myy, layer: "objects" })
-            });
+            
+            }); */
         } else {
             return
         }
@@ -538,11 +605,18 @@ const srun3= function() {
     
     on("chat:message", msgGet)
     
+    const explodegrenade = grenadeid => {
+        const grenandeobj = getObj('grapic', grenadeid);
+        if ( grenandeobj) {
+            spawnFx(grenandeobj.get('left'), grenandeobj.get('top'), 'explosion-fire')
+        }
+    };
     
     const updateCombatPass = function (turnorder) {
         log('subtract 10 from all markers, remove <=0, update pools and reorder');
         const neworder = turnorder.map(function (turn) {
             turn["pr"] = (turn["custom"] == "End of Pass") ? 0 : turn["pr"] - 10;
+            if (state["srun3api"]["grenades"].includes(turn["id"])) explodegrenade(turn["id"]);
             return (turn["pr"] <= 0) ? null : turn;
         });
         log(neworder);
